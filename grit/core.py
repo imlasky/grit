@@ -1,3 +1,4 @@
+# inspiration from micrograd https://github.com/karpathy/micrograd
 import numpy as np
 
 np.random.seed(1337)
@@ -13,7 +14,7 @@ class Value:
 
     def __str__(self):
 
-        return "Value %r " % (self.data)
+        return "Value %r grad %r" % (self.data, self.grad)
     
     # Add magic method
     # Return the current data plus the other data
@@ -24,10 +25,8 @@ class Value:
 
         def _backward():
             self.grad += out.grad
-            print('add grad')
-            print((self.data, self.grad))
-
             other.grad += out.grad
+
         out._backward = _backward
         
         return out
@@ -40,10 +39,9 @@ class Value:
         out = Value(self.data * other.data, (self, other))
 
         def _backward():
-            self.grad += out.grad * out.grad
-            print('mul grad')
-            print((self.data, self.grad))
-            other.grad += out.grad * out.grad
+            self.grad += other.data * out.grad
+            other.grad += self.data * out.grad
+            
         out._backward = _backward
 
         return out
@@ -59,31 +57,47 @@ class Value:
         # Chain rule means to multiply this with the output grad
         def _backward():
             self.grad += (out.data > 0) * out.grad
-            print('relu grad')
-            print((self.data, self.grad))
 
         out._backward = _backward
         return out
     
+    # Main backward method
+    # Build using topographic sort
+    # E.g., start with current state, then go to all the children and their children
     def backward(self):
 
         topo = []
         visited = set()
         def build_topo(v):
+            # Check if node in visited
             if v not in visited:
                 visited.add(v)
+                # Iterate through all children
                 for child in v._prev:
                     build_topo(child)
                 topo.append(v)
 
         build_topo(self)
 
+        # Set the gradient to 1 by default
         self.grad = 1
+
+        # Reverse the list to start with the latest function
         for v in reversed(topo):
+            # Call the backwards function on that node
             v._backward()
             
+
+class Module:
+
+    def zero_grad(self):
+        for p in self.parameters():
+            p.grad = 0
+
+    def parameters(self):
+        return []
     
-class Neuron:
+class Neuron(Module):
 
     # Initialize with random weights based on number of inputs
     # Set the bias to be 0
@@ -100,11 +114,15 @@ class Neuron:
 
         return "Neuron (weights: %r) (bias: %r)" % (self.numpy(self.w), self.numpy([self.b]))
     
-    # When the neuron is called with inputs (x), perform the forward pass
+    # When the neuron is called with inputs x, perform the forward pass
+    # i.e., w1 * x1 + w2 * x2 + ... + wn * xn
     def __call__(self, x):
 
         out = np.sum([wi*xi for wi,xi in zip(self.w, x)] + [self.b])
-        return out
+        return out.relu()
+    
+    def parameters(self):
+        return self.w + [self.b]
     
     # Static method to print the numpy array being used
     @staticmethod
@@ -112,7 +130,7 @@ class Neuron:
 
         return np.array([a.data for a in arr])
     
-class Layer:
+class Layer(Module):
 
     # Initialize with data weights
     def __init__(self, data=None, nInputs=3, nOutputs=1):
@@ -121,6 +139,7 @@ class Layer:
             self.data = data
             self._reshape()
             self.neurons = [Neuron(row) for row in self.data]
+            print(self.neurons[0])
         else:
             self.neurons = [Neuron(nInputs) for _ in range(nOutputs)]
         
@@ -140,3 +159,6 @@ class Layer:
 
         if self.data.ndim == 1:
             self.data = np.reshape(self.data, (-1, self.data.shape[0]))
+
+    def parameters(self):
+        return [p for n in self.neurons for p in n.parameters()]
